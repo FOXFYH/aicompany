@@ -6,10 +6,12 @@
 <title>AI公司 · 网页遥控面板</title>
 <style>
 /* ============================================================
-   AI公司 · 网页遥控面板（公司面板.html）  版本 0.01  日期 2026-10-10
+   AI公司 · 网页遥控面板（公司面板.html）  版本 0.02  日期 2026-10-10
    单文件 · 无外部 CDN · 手机端优先 · 原生 JS。
    面板只发「公司命令」帧、收「公司回执」帧；干活的是电脑上的
    公司主界面（网页服务.py 代跑 公司CLI.py）。零特权、免心跳。
+   用户只需填「频道」（前缀 31415926fF@ 自动拼接）；连上即自动发
+   「公司发现」帧认领电脑身份（实例号 / 昵称 / 是否需口令）。
    ============================================================ */
 :root{
   --bg:#f2f3f5; --card:#ffffff; --fg:#222222; --dim:#666666; --mut:#999999;
@@ -103,19 +105,21 @@ tr.sel td{background:var(--blue-bg);}
   <div class="card">
     <h3>连接设置</h3>
     <div class="row"><label>频道</label>
-      <input class="grow" id="ch" autocomplete="off" autocapitalize="off" placeholder="31415926fF@PANEL"></div>
+      <input class="grow" id="ch" value="31415926fF@PANEL" autocomplete="off" autocapitalize="off"
+             placeholder="31415926fF@PANEL"></div>
     <div class="row"><label>目标公司</label>
-      <input class="grow" id="target" autocomplete="off" placeholder="电脑上的公司实例号或设备昵称，如 SSTR"></div>
+      <input class="grow" id="target" autocomplete="off" placeholder="留空即可——连上后自动填（电脑实例号/昵称）"></div>
     <div class="row"><label>本面板标识</label>
       <input class="grow" id="myid" autocomplete="off" placeholder="本面板的实例号（自动生成，回执靠它识别）"></div>
-    <div class="row"><label>口令</label>
-      <input class="grow" id="code" autocomplete="off" placeholder="可为空（电脑端默认不校验）"></div>
+    <div class="row" id="rowCode" style="display:none"><label>口令</label>
+      <input class="grow" id="code" autocomplete="off" placeholder="电脑端设了口令才需填，否则留空"></div>
     <div class="btns">
       <button id="btnSave">保存并连接</button>
       <button class="ghost" id="btnPing">喊一声（ping）</button>
     </div>
-    <div class="hint">频道名相当于连接密码，电脑端「网页服务」默认监听 <b>31415926fF@PANEL</b>。
-      目标公司＝电脑端「设备昵称」或「实例号」（在电脑公司界面主页可见）。</div>
+    <div class="hint" id="idinfo">电脑身份：<b>未发现</b></div>
+    <div class="hint">只填「频道」即可——前缀 <b>31415926fF@</b> 自动拼接（只填 PANEL 或留空都行）；
+      连上后自动发现电脑身份，目标公司 / 口令全程不用手填。</div>
   </div>
 
   <!-- ============ 标签页 ============ -->
@@ -239,10 +243,13 @@ tr.sel td{background:var(--blue-bg);}
 <script>
 'use strict';
 /* =====================================================================
-   AI公司 · 网页遥控面板 脚本
+   AI公司 · 网页遥控面板 脚本    版本 0.02
    帧：面板→公司 {t:'公司命令',to,口令,动词,参数,请求id,实例号}
        公司→面板 {t:'公司回执',to,请求id,结果,原因码,数据}
-   免心跳；断线逐次退避（3,6,12,24,48,60s）；连上即静默等点名。
+       面板→公司 {t:'公司发现',实例号,请求id,to(可空=广播)}
+       公司→面板 {t:'公司身份',to,请求id,实例号,昵称,软件,需要口令,版本}
+   免心跳；断线逐次退避（3,6,12,24,48,60s）；连上即自动发现电脑身份。
+   用户只需填「频道」——前缀 31415926fF@ 自动拼接。
    ===================================================================== */
 
 var WS_TMPL = 'wss://free.blr2.piesocket.com/v3/%s?api_key=ReDFavhh0qnOCKUUjQiLKVZ9RdxA6e4BGVKxxNug';
@@ -250,9 +257,23 @@ var WS_TMPL2 = 'wss://s20307.nyc1.piesocket.com/v3/%s?api_key=IWkfk43ha3yilmYGRG
 var BACKOFF = [3,6,12,24,48,60], RECONNECT_MAX = 8, RTO = 30000;
 var LS = {ch:'co_panel_ch', target:'co_panel_target', myid:'co_panel_myid', code:'co_panel_code'};
 
+/* ---------- 频道归一化：用户只填 31415926fF@ 那部分，前缀 / 后缀自动拼接 ---------- */
+var CH_PREFIX = '31415926fF@', CH_SUFFIX = 'PANEL';
+var CH_BODY = CH_PREFIX.replace(/@$/, '');       // '31415926fF'
+var CH_FULL = CH_PREFIX + CH_SUFFIX;             // '31415926fF@PANEL'
+function 规范频道(raw){
+  var s = String(raw==null ? '' : raw).trim();
+  if(!s) return CH_FULL;                         // 空 → 完整默认
+  if(s === CH_BODY) return CH_FULL;              // 只填了前缀（无 @）→ 补完整
+  if(s.indexOf('@') < 0) return CH_PREFIX + s;   // 不含 @（如只填 PANEL）→ 补前缀
+  if(s.slice(s.indexOf('@')+1).trim() === '') return CH_FULL;  // 只给前缀（以 @ 结尾）→ 补用途
+  return s;                                      // 已含 @ 且带后缀 → 原样使用
+}
+
 var S = {
-  ch:'31415926fF@PANEL', target:'', myid:'', code:'',
-  ws:null, on:false, tries:0, back:0, timer:null, rid:0, pending:{}, tab:'home'
+  ch: CH_FULL, target:'', myid:'', code:'',
+  ws:null, on:false, tries:0, back:0, timer:null, rid:0, pending:{}, tab:'home',
+  disc:null, haveId:false
 };
 
 var COMMON_VERBS = ['whoami','conv_list','staff_list','staff_onboard','staff_recode',
@@ -291,12 +312,12 @@ function teardown(){
   try{ if(S.ws){ S.ws.onopen=S.ws.onmessage=S.ws.onclose=S.ws.onerror=null; S.ws.close(); } }catch(e){}
   clearTimeout(S.timer);
 }
-function chanDefault(){ return lsGet(LS.ch,'31415926fF@PANEL'); }
+function chanDefault(){ return 规范频道(lsGet(LS.ch, CH_FULL)); }
 function connect(){
   teardown();
   setOn(false,'连接中…');
-  var ch = ($('ch').value||'').trim() || chanDefault();
-  if(!ch){ setOn(false,'请先填频道'); return; }
+  var ch = 规范频道($('ch').value || chanDefault());  // 前缀 / 后缀自动拼接
+  $('ch').value = ch;                                 // 回显最终频道，让用户看到
   S.ch = ch; lsSet(LS.ch, ch);
   var url = WS_TMPL.replace('%s', ch);
   var opened = false;
@@ -304,6 +325,7 @@ function connect(){
   S.ws.onopen = function(){
     opened = true; S.tries = 0; S.back = 0; setOn(true);
     logit('已连上频道 ' + ch);
+    sendDiscovery();                                  // 连上即自动发现电脑身份
   };
   S.ws.onmessage = function(ev){ onMsg(ev.data); };
   S.ws.onclose = function(){
@@ -312,6 +334,30 @@ function connect(){
     scheduleReconnect();
   };
   S.ws.onerror = function(){ /* 交给 onclose 处理 */ };
+}
+
+/* ---------- 发现 / 握手：自动认领电脑身份，省掉手填目标 / 口令 ---------- */
+function sendDiscovery(){
+  var rid = 'd' + (++S.rid) + '-' + Date.now();
+  var frame = {t:'公司发现', 实例号:(S.myid||''), 请求id:rid};
+  var 喊 = (S.target||'').trim();
+  if(喊) frame.to = 喊;                 // 已知目标 → 定向；否则空 to＝广播探测
+  S.disc = rid;
+  if(sendRaw(frame)) logit('已发「公司发现」，等电脑身份…');
+}
+function onIdentity(d){
+  var id = String(d.实例号||'').trim(), nick = String(d.昵称||'').trim();
+  var 需 = !!d.需要口令;
+  if(id){ S.target = id; $('target').value = id; lsSet(LS.target, id); }
+  S.haveId = true;
+  $('rowCode').style.display = 需 ? '' : 'none';      // 电脑端没口令 → 完全不提示
+  if(!需){ S.code=''; $('code').value=''; lsSet(LS.code,''); }
+  $('idinfo').innerHTML = '电脑身份：<b>' + esc(nick || id || '—') + '</b>'
+    + '　实例号 <b>' + esc(id || '—') + '</b>'
+    + '　频道 <b>' + esc(S.ch) + '</b>'
+    + '　' + (需 ? '需要口令' : '免口令')
+    + '　<span class="st">v' + esc(String(d.版本||'')) + '</span>';
+  logit('已发现电脑：' + (nick||'—') + ' / ' + (id||'—') + (需 ? '（需要口令，请填写）' : '（免口令）'));
 }
 function scheduleReconnect(){
   if(S.tries >= RECONNECT_MAX){
@@ -335,7 +381,7 @@ function sendCmd(动词, 参数, 完成){
   var rid = 'r' + (++S.rid) + '-' + Date.now();
   var frame = {t:'公司命令', to:(S.target||'').trim(), 口令:(S.code||''),
                动词:动词, 参数:参数, 请求id:rid, 实例号:(S.myid||'')};
-  if(!frame.to){ logit('未填「目标公司」，无法发送'); return false; }
+  if(!frame.to){ logit(S.on ? '还没发现电脑身份，稍候再试（或点「保存并连接」重发发现）' : '未连接，发送失败'); return false; }
   if(!sendRaw(frame)){ if(完成) 完成({结果:'FAIL',原因码:'no_ws',数据:{说明:'面板未连接'}}); return false; }
   S.pending[rid] = {动词:动词, 参数:参数, 完成:完成, ts:Date.now()};
   logit('已发「' + 动词 + '」，等回执…');
@@ -351,6 +397,7 @@ function onMsg(txt){
   var d; try{ d = JSON.parse(txt); }catch(e){ return; }
   if(!d || typeof d !== 'object') return;
   var t = String(d.t||'');
+  if(t === '公司身份'){ onIdentity(d); return; }   // 自动发现回执 → 认领电脑身份
   if(t === 'pong'){ logit('电脑端在线（pong）'); return; }
   if(t !== '公司回执') return;
   var p = S.pending[d.请求id];
@@ -660,7 +707,7 @@ $('btnMailReply').onclick = function(){
    连接设置 / 顶栏
    ===================================================================== */
 function loadCfg(){
-  S.ch = lsGet(LS.ch,'31415926fF@PANEL');
+  S.ch = 规范频道(lsGet(LS.ch, CH_FULL));
   S.target = lsGet(LS.target,'');
   S.myid = lsGet(LS.myid,'') || randId();
   S.code = lsGet(LS.code,'');
@@ -669,7 +716,8 @@ function loadCfg(){
   $('myid').value=S.myid; $('code').value=S.code;
 }
 function saveCfg(){
-  S.ch=$('ch').value.trim()||'31415926fF@PANEL';
+  S.ch = 规范频道($('ch').value);        // 只填前缀 / 留空都自动拼成完整频道
+  $('ch').value = S.ch;                  // 回显最终频道
   S.target=$('target').value.trim();
   S.myid=$('myid').value.trim()||randId();
   S.code=$('code').value;
@@ -679,9 +727,9 @@ function saveCfg(){
 $('btnSave').onclick = function(){ saveCfg(); connect(); };
 $('btnConn').onclick = function(){ saveCfg(); connect(); };
 $('btnPing').onclick = function(){
-  if(!sendRaw({t:'ping', to:(S.target||'').trim(), 实例号:(S.myid||'')})){
-    logit('未连接，喊不动'); return;
-  }
+  if(!S.on){ logit('未连接，喊不动'); return; }
+  if(!(S.target||'').trim()){ sendDiscovery(); return; }   // 还没认领目标 → 先发现
+  if(!sendRaw({t:'ping', to:(S.target||'').trim(), 实例号:(S.myid||'')})){ logit('发送失败'); return; }
   logit('已喊一声（ping）…');
 };
 $('btnLogToggle').onclick = function(){
@@ -689,11 +737,11 @@ $('btnLogToggle').onclick = function(){
   this.textContent = lg.classList.contains('open') ? '收起' : '展开';
 };
 
-/* ---------- 启动 ---------- */
+/* ---------- 启动：只填频道即可，其余自动同步 ---------- */
 loadCfg();
 buildTabs();
-logit('填好「频道 / 目标公司」后点「连接」');
-if(S.target){ connect(); } else { setOn(false,'请先填「目标公司」'); }
+logit('正在连接 ' + S.ch + ' …（前缀自动拼接、电脑身份自动发现）');
+connect();   // 打开即连；连上自动发「公司发现」认领电脑身份（目标 / 口令无需手填）
 </script>
 </body>
 </html>
