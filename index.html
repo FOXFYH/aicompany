@@ -6,11 +6,14 @@
 <title>AI公司 · 网页遥控面板</title>
 <style>
 /* ============================================================
-   AI公司 · 网页遥控面板（公司面板.html）  版本 0.02  日期 2026-10-10
+   AI公司 · 网页遥控面板（公司面板.html）  版本 0.04  日期 2026-10-12
+   v0.03（遥控型对齐 W3）：信箱动词口径与 下级模块\邮箱分页.py / CLI工具\公司CLI.py
+   对齐——统一 mail_inbox / mail_show / mail_read / mail_reply / mail_send，
+   参数 to/target/dev/soft/id/text/sender；信箱页补「写新信（mail_send）」。
    单文件 · 无外部 CDN · 手机端优先 · 原生 JS。
    面板只发「公司命令」帧、收「公司回执」帧；干活的是电脑上的
    公司主界面（网页服务.py 代跑 公司CLI.py）。零特权、免心跳。
-   用户只需填「频道」（前缀 31415926fF@ 自动拼接）；连上即自动发
+   用户须填「频道」（完整＝密码段@PANEL，密码段由本人输入）；连上即自动发
    「公司发现」帧认领电脑身份（实例号 / 昵称 / 是否需口令）。
    ============================================================ */
 :root{
@@ -105,8 +108,8 @@ tr.sel td{background:var(--blue-bg);}
   <div class="card">
     <h3>连接设置</h3>
     <div class="row"><label>频道</label>
-      <input class="grow" id="ch" value="31415926fF@PANEL" autocomplete="off" autocapitalize="off"
-             placeholder="31415926fF@PANEL"></div>
+      <input class="grow" id="ch" value="" autocomplete="off" autocapitalize="off"
+             placeholder="输入完整频道：密码段@PANEL"></div>
     <div class="row"><label>目标公司</label>
       <input class="grow" id="target" autocomplete="off" placeholder="留空即可——连上后自动填（电脑实例号/昵称）"></div>
     <div class="row"><label>本面板标识</label>
@@ -118,7 +121,7 @@ tr.sel td{background:var(--blue-bg);}
       <button class="ghost" id="btnPing">喊一声（ping）</button>
     </div>
     <div class="hint" id="idinfo">电脑身份：<b>未发现</b></div>
-    <div class="hint">只填「频道」即可——前缀 <b>31415926fF@</b> 自动拼接（只填 PANEL 或留空都行）；
+    <div class="hint">「频道」请填 密码段@PANEL（<b>密码段由你本人掌握，网页源码不含</b>；只填密码段自动补 @PANEL）；
       连上后自动发现电脑身份，目标公司 / 口令全程不用手填。</div>
   </div>
 
@@ -249,7 +252,7 @@ tr.sel td{background:var(--blue-bg);}
        面板→公司 {t:'公司发现',实例号,请求id,to(可空=广播)}
        公司→面板 {t:'公司身份',to,请求id,实例号,昵称,软件,需要口令,版本}
    免心跳；断线逐次退避（3,6,12,24,48,60s）；连上即自动发现电脑身份。
-   用户只需填「频道」——前缀 31415926fF@ 自动拼接。
+   用户须填「频道」——密码段@PANEL，密码段由用户输入。
    ===================================================================== */
 
 var WS_TMPL = 'wss://free.blr2.piesocket.com/v3/%s?api_key=ReDFavhh0qnOCKUUjQiLKVZ9RdxA6e4BGVKxxNug';
@@ -257,17 +260,18 @@ var WS_TMPL2 = 'wss://s20307.nyc1.piesocket.com/v3/%s?api_key=IWkfk43ha3yilmYGRG
 var BACKOFF = [3,6,12,24,48,60], RECONNECT_MAX = 8, RTO = 30000;
 var LS = {ch:'co_panel_ch', target:'co_panel_target', myid:'co_panel_myid', code:'co_panel_code'};
 
-/* ---------- 频道归一化：用户只填 31415926fF@ 那部分，前缀 / 后缀自动拼接 ---------- */
-var CH_PREFIX = '31415926fF@', CH_SUFFIX = 'PANEL';
-var CH_BODY = CH_PREFIX.replace(/@$/, '');       // '31415926fF'
-var CH_FULL = CH_PREFIX + CH_SUFFIX;             // '31415926fF@PANEL'
+/* ---------- 频道归一化：用户填密码段（可选 @PANEL），自动补后缀（源码不含密码） ---------- */
+var CH_SUFFIX = 'PANEL';                        // 本面板用途后缀（非密码）
+var CH_FULL = '';                               // 无内置频道：密码段由用户输入，源码不含
+/* 安全：不再内置频道密码段，改由用户在「频道」里填；
+   用户填「密码段@PANEL」或只填「密码段」（自动补 @PANEL）。 */
 function 规范频道(raw){
   var s = String(raw==null ? '' : raw).trim();
-  if(!s) return CH_FULL;                         // 空 → 完整默认
-  if(s === CH_BODY) return CH_FULL;              // 只填了前缀（无 @）→ 补完整
-  if(s.indexOf('@') < 0) return CH_PREFIX + s;   // 不含 @（如只填 PANEL）→ 补前缀
-  if(s.slice(s.indexOf('@')+1).trim() === '') return CH_FULL;  // 只给前缀（以 @ 结尾）→ 补用途
-  return s;                                      // 已含 @ 且带后缀 → 原样使用
+  if(!s) return '';                              // 空 → 由用户填写
+  var i = s.indexOf('@');
+  if(i < 0) return s + '@' + CH_SUFFIX;          // 只填密码段 → 补 @PANEL
+  if(!s.slice(i+1).trim()) return s.slice(0,i) + '@' + CH_SUFFIX;  // 密码段@ → 补 PANEL
+  return s;                                      // 已完整 → 原样
 }
 
 var S = {
@@ -693,7 +697,7 @@ $('btnStaff').onclick = function(){
 };
 $('btnMailRead').onclick = function(){
   if(!选中信){ out('o_mail','先在列表点一封信'); return; }
-  sendCmd('mail_read', Object.assign(路由参(),{id:选中信}), function(d){
+  sendCmd('mail_read', Object.assign(路由参(false),{id:选中信}), function(d){
     out('o_mail', 文本(d)||JSON.stringify(jd(d),null,2)); });
 };
 $('btnMailReply').onclick = function(){
