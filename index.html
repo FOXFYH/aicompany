@@ -255,8 +255,25 @@ tr.sel td{background:var(--blue-bg);}
    用户须填「频道」——密码段@PANEL，密码段由用户输入。
    ===================================================================== */
 
-var WS_TMPL = 'wss://free.blr2.piesocket.com/v3/%s?api_key=ReDFavhh0qnOCKUUjQiLKVZ9RdxA6e4BGVKxxNug';
-var WS_TMPL2 = 'wss://s20307.nyc1.piesocket.com/v3/%s?api_key=IWkfk43ha3yilmYGRGLDeAoVW9tu6QqiSviJmudL';
+/* 接口密钥不再内置：首次由使用者输入并保存在本机，源码不含密钥 */
+function FOX_API_KEY(){
+  try{
+    var k = localStorage.getItem('fox_ws_api_key');
+    if(!k){ k = (prompt('请输入 PieSocket 接口密钥（源码不含，仅存本机）')||'').trim(); if(k) localStorage.setItem('fox_ws_api_key', k); }
+    return k;
+  }catch(e){ return ''; }
+}
+
+/* 备用接口密钥不再内置：首次由使用者输入并保存在本机，源码不含密钥 */
+function FOX_API_KEY2(){
+  try{
+    var k = localStorage.getItem('fox_ws_api_key2');
+    if(!k){ k = (prompt('请输入 PieSocket 备用接口密钥（源码不含，仅存本机）')||'').trim(); if(k) localStorage.setItem('fox_ws_api_key2', k); }
+    return k;
+  }catch(e){ return ''; }
+}
+var WS_TMPL = 'wss://free.blr2.piesocket.com/v3/%s?api_key=' + FOX_API_KEY();
+var WS_TMPL2 = 'wss://s20307.nyc1.piesocket.com/v3/%s?api_key=' + FOX_API_KEY2();
 var BACKOFF = [3,6,12,24,48,60], RECONNECT_MAX = 8, RTO = 30000;
 var LS = {ch:'co_panel_ch', target:'co_panel_target', myid:'co_panel_myid', code:'co_panel_code'};
 
